@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Offroad Terrain Segmentation - Production</title>
+
+<script src="https://cdn.tailwindcss.com"></script>
+
+<style>
+.loading-spinner {
+  border: 3px solid #f3f3f3;
+  border-top: 3px solid #3b82f6;
+  border-radius: 50%;
+  width: 40px;
+  height: 40px;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.canvas-container {
+  position: relative;
+  display: inline-block;
+}
+canvas {
+  border: 2px solid #e5e7eb;
+  border-radius: 8px;
+}
+</style>
+</head>
+
+<body class="bg-gradient-to-br from-blue-50 to-indigo-100 min-h-screen">
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const API_BASE_URL = "http://localhost:5000/api";
+
+function App() {
+  const [image, setImage] = useState(null);
+  const [imageUrl, setImageUrl] = useState(null);
+  const [processing, setProcessing] = useState(false);
+  const [statistics, setStatistics] = useState(null);
+  const [classes, setClasses] = useState({});
+  const [error, setError] = useState(null);
+  const [showOverlay, setShowOverlay] = useState(true);
+  const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+  const [imageSize, setImageSize] = useState(null);
+
+  const canvasRef = useRef(null);
+  const overlayCanvasRef = useRef(null);
+  const fileInputRef = useRef(null);
+
+  // ===============================
+  // Fetch class names
+  // ===============================
+  useEffect(() => {
+    fetch(`${API_BASE_URL}/classes`)
+      .then(r => r.json())
+      .then(data => {
+        const map = {};
+        data.classes.forEach(c => {
+          map[c.id] = { name: c.name, color: c.color };
+        });
+        setClasses(map);
+      })
+      .catch(() => console.warn("Using fallback classes"));
+  }, []);
+
+  // ===============================
+  // Upload image
+  // ===============================
+  const handleImageUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    setImage(file);
+    setImageUrl(URL.createObjectURL(file));
+    setStatistics(null);
+    setError(null);
+  };
+
+  // ===============================
+  // Main segmentation call
+  // ===============================
+  const processImage = async () => {
+    if (!image) return;
+
+    setProcessing(true);
+    setError(null);
+
+    try {
+      const formData = new FormData();
+      formData.append("file", image);
+
+      const response = await fetch(
+        `${API_BASE_URL}/segment`,
+        {
+          method: "POST",
+          body: formData
+        }
+      );
+
+      const data = await response.json();
+
+      if (!data.success) throw new Error(data.error);
+
+      // ✅ FIXED: compute image size from stats
+      const totalPixels = data.statistics.reduce(
+        (s, c) => s + c.pixel_count,
+        0
+      );
+
+      const approx = Math.round(Math.sqrt(totalPixels));
+      setImageSize({ width: approx, height: approx });
+
+      setStatistics(data.statistics);
+
+      // ✅ FIXED: load mask from backend path
+      const maskImg = new Image();
+      maskImg.src =
+        `http://localhost:5000/api/mask?path=${encodeURIComponent(
+          data.mask_path
+        )}`;
+
+      maskImg.onload = () => drawImages(maskImg);
+
+    } catch (err) {
+      console.error(err);
+      setError("Segmentation failed. Make sure API server is running.");
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  // ===============================
+  // Draw original + overlay
+  // ===============================
+  const drawImages = (maskImg) => {
+    const img = new Image();
+    img.src = imageUrl;
+
+    img.onload = () => {
+      const canvas = canvasRef.current;
+      const ctx = canvas.getContext("2d");
+
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+
+      const overlay = overlayCanvasRef.current;
+      const octx = overlay.getContext("2d");
+
+      overlay.width = img.width;
+      overlay.height = img.height;
+      octx.drawImage(maskImg, 0, 0, img.width, img.height);
+    };
+  };
+
+  // ===============================
+  // Download mask
+  // ===============================
+  const downloadMask = () => {
+    const link = document.createElement("a");
+    link.download = "segmentation_mask.png";
+    link.href = overlayCanvasRef.current.toDataURL();
+    link.click();
+  };
+
+  return (
+    <div className="container mx-auto p-6 max-w-7xl">
+
+      <div className="bg-white rounded-xl shadow-2xl p-8 mb-6">
+
+        <h1 className="text-4xl font-bold mb-2">
+          🚙 Offroad Terrain Segmentation
+        </h1>
+
+        {error && (
+          <div className="mb-4 p-3 bg-red-100 text-red-700 rounded">
+            {error}
+          </div>
+        )}
+
+        {/* Buttons */}
+        <div className="flex gap-4 mb-6">
+
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleImageUpload}
+            className="hidden"
+          />
+
+          <button
+            onClick={() => fileInputRef.current.click()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-lg"
+          >
+            📁 Upload Image
+          </button>
+
+          {image && !processing && (
+            <button
+              onClick={processImage}
+              className="px-6 py-3 bg-green-600 text-white rounded-lg"
+            >
+              🔍 Analyze Terrain
+            </button>
+          )}
+
+          {processing && <div className="loading-spinner"></div>}
+        </div>
+
+        {imageUrl && (
+          <div className="grid lg:grid-cols-2 gap-8">
+
+            {/* LEFT */}
+            <div>
+              <div className="canvas-container">
+                <canvas ref={canvasRef} className="max-w-full" />
+                {statistics && showOverlay && (
+                  <canvas
+                    ref={overlayCanvasRef}
+                    style={{
+                      position: "absolute",
+                      top: 2,
+                      left: 2,
+                      opacity: overlayOpacity,
+                      pointerEvents: "none"
+                    }}
+                    className="max-w-full"
+                  />
+                )}
+              </div>
+
+              {statistics && (
+                <div className="mt-4">
+                  <label className="mr-3">
+                    <input
+                      type="checkbox"
+                      checked={showOverlay}
+                      onChange={e => setShowOverlay(e.target.checked)}
+                    />
+                    Show Overlay
+                  </label>
+
+                  <button
+                    onClick={downloadMask}
+                    className="ml-4 px-4 py-2 bg-purple-600 text-white rounded"
+                  >
+                    💾 Download Mask
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* RIGHT */}
+            <div>
+              <h3 className="text-xl font-semibold mb-4">
+                Analysis Results
+              </h3>
+
+              {statistics && (
+                <>
+                  <div className="bg-blue-50 p-3 rounded mb-4">
+                    <div>
+                      Size: {imageSize?.width} × {imageSize?.height}
+                    </div>
+                  </div>
+
+                  <div className="space-y-2 max-h-96 overflow-y-auto">
+                    {statistics.map(stat => (
+                      <div key={stat.class_id} className="bg-gray-50 p-3 rounded">
+                        <div className="flex justify-between mb-1">
+                          <span className="font-medium">
+                            {stat.class_name}
+                          </span>
+                          <span>{stat.percentage.toFixed(2)}%</span>
+                        </div>
+
+                        <div className="w-full bg-gray-200 h-2 rounded">
+                          <div
+                            className="h-2 rounded"
+                            style={{
+                              width: `${stat.percentage}%`,
+                              backgroundColor: stat.color
+                            }}
+                          />
+                        </div>
+
+                        <div className="text-xs text-gray-600">
+                          {stat.pixel_count.toLocaleString()} pixels
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.render(<App />, document.getElementById("root"));
+</script>
+</body>
+</html>

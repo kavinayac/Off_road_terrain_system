@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offroad Terrain Segmentation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .pixel-grid {
+            display: grid;
+            gap: 1px;
+            background: #ddd;
+        }
+        .loading-spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .canvas-container {
+            position: relative;
+            display: inline-block;
+        }
+        canvas {
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="root"></div>
+
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <script type="text/babel">
+        const { useState, useRef, useEffect } = React;
+
+        // Segmentation classes for offroad terrain (typical categories)
+        const CLASSES = {
+            0: { name: 'Background', color: '#000000' },
+            1: { name: 'Road/Path', color: '#808080' },
+            2: { name: 'Grass', color: '#00FF00' },
+            3: { name: 'Dirt', color: '#8B4513' },
+            4: { name: 'Sand', color: '#F4A460' },
+            5: { name: 'Rock', color: '#696969' },
+            6: { name: 'Water', color: '#0000FF' },
+            7: { name: 'Vegetation', color: '#228B22' },
+            8: { name: 'Sky', color: '#87CEEB' },
+            9: { name: 'Obstacle', color: '#FF0000' }
+        };
+
+        function App() {
+            const [image, setImage] = useState(null);
+            const [imageUrl, setImageUrl] = useState(null);
+            const [processing, setProcessing] = useState(false);
+            const [segmentation, setSegmentation] = useState(null);
+            const [pixelData, setPixelData] = useState(null);
+            const [hoveredPixel, setHoveredPixel] = useState(null);
+            const [showOverlay, setShowOverlay] = useState(true);
+            const [overlayOpacity, setOverlayOpacity] = useState(0.6);
+            const [selectedClass, setSelectedClass] = useState(null);
+            
+            const canvasRef = useRef(null);
+            const overlayCanvasRef = useRef(null);
+            const fileInputRef = useRef(null);
+
+            const handleImageUpload = (e) => {
+                const file = e.target.files[0];
+                if (file && file.type.startsWith('image/')) {
+                    setImage(file);
+                    const url = URL.createObjectURL(file);
+                    setImageUrl(url);
+                    setSegmentation(null);
+                    setPixelData(null);
+                }
+            };
+
+            const processImage = async () => {
+                if (!image) return;
+
+                setProcessing(true);
+                try {
+                    // Convert image to base64
+                    const reader = new FileReader();
+                    reader.onload = async (e) => {
+                        const base64Data = e.target.result.split(',')[1];
+                        
+                        // Simulate segmentation using Claude API
+                        // In production, you would send this to your backend with the model
+                        const result = await simulateSegmentation(base64Data);
+                        setSegmentation(result.mask);
+                        setPixelData(result.pixelData);
+                        drawSegmentation(result.mask);
+                    };
+                    reader.readAsDataURL(image);
+                } catch (error) {
+                    console.error('Error processing image:', error);
+                    alert('Error processing image. Please try again.');
+                } finally {
+                    setProcessing(false);
+                }
+            };
+
+            // Simulate segmentation (in production, this would call your backend)
+            const simulateSegmentation = async (base64Image) => {
+                // Load image to get dimensions
+                const img = new Image();
+                img.src = imageUrl;
+                
+                return new Promise((resolve) => {
+                    img.onload = () => {
+                        const width = img.width;
+                        const height = img.height;
+                        
+                        // Create sample segmentation mask (replace with actual model inference)
+                        const mask = Array(height).fill(null).map(() => 
+                            Array(width).fill(null).map(() => Math.floor(Math.random() * 10))
+                        );
+                        
+                        // Create pixel data with coordinates and classes
+                        const pixelData = [];
+                        for (let y = 0; y < height; y++) {
+                            for (let x = 0; x < width; x++) {
+                                pixelData.push({
+                                    x, y,
+                                    class: mask[y][x],
+                                    className: CLASSES[mask[y][x]].name,
+                                    color: CLASSES[mask[y][x]].color
+                                });
+                            }
+                        }
+                        
+                        setTimeout(() => {
+                            resolve({ mask, pixelData });
+                        }, 1500); // Simulate processing time
+                    };
+                });
+            };
+
+            const drawSegmentation = (mask) => {
+                if (!canvasRef.current || !overlayCanvasRef.current) return;
+
+                const img = new Image();
+                img.src = imageUrl;
+                
+                img.onload = () => {
+                    // Draw original image
+                    const canvas = canvasRef.current;
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+
+                    // Draw segmentation overlay
+                    const overlayCanvas = overlayCanvasRef.current;
+                    const overlayCtx = overlayCanvas.getContext('2d');
+                    overlayCanvas.width = img.width;
+                    overlayCanvas.height = img.height;
+
+                    const imageData = overlayCtx.createImageData(img.width, img.height);
+                    
+                    for (let y = 0; y < mask.length; y++) {
+                        for (let x = 0; x < mask[0].length; x++) {
+                            const classId = mask[y][x];
+                            const color = CLASSES[classId].color;
+                            const rgb = hexToRgb(color);
+                            
+                            const idx = (y * img.width + x) * 4;
+                            imageData.data[idx] = rgb.r;
+                            imageData.data[idx + 1] = rgb.g;
+                            imageData.data[idx + 2] = rgb.b;
+                            imageData.data[idx + 3] = 180; // Alpha
+                        }
+                    }
+                    
+                    overlayCtx.putImageData(imageData, 0, 0);
+                };
+            };
+
+            const hexToRgb = (hex) => {
+                const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+                return result ? {
+                    r: parseInt(result[1], 16),
+                    g: parseInt(result[2], 16),
+                    b: parseInt(result[3], 16)
+                } : { r: 0, g: 0, b: 0 };
+            };
+
+            const handleCanvasHover = (e) => {
+                if (!segmentation) return;
+                
+                const canvas = canvasRef.current;
+                const rect = canvas.getBoundingClientRect();
+                const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width));
+                const y = Math.floor((e.clientY - rect.top) * (canvas.height / rect.height));
+                
+                if (x >= 0 && x < segmentation[0].length && y >= 0 && y < segmentation.length) {
+                    const classId = segmentation[y][x];
+                    setHoveredPixel({ x, y, classId, className: CLASSES[classId].name });
+                }
+            };
+
+            const downloadSegmentation = () => {
+                if (!overlayCanvasRef.current) return;
+                
+                const link = document.createElement('a');
+                link.download = 'segmentation_mask.png';
+                link.href = overlayCanvasRef.current.toDataURL();
+                link.click();
+            };
+
+            const downloadPixelData = () => {
+                if (!pixelData) return;
+                
+                const csv = 'X,Y,Class,ClassName\n' + 
+                    pixelData.map(p => `${p.x},${p.y},${p.class},${p.className}`).join('\n');
+                
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const link = document.createElement('a');
+                link.download = 'pixel_data.csv';
+                link.href = URL.createObjectURL(blob);
+                link.click();
+            };
+
+            const getClassStats = () => {
+                if (!pixelData) return {};
+                
+                const stats = {};
+                pixelData.forEach(p => {
+                    stats[p.class] = (stats[p.class] || 0) + 1;
+                });
+                
+                const total = pixelData.length;
+                return Object.entries(stats).map(([classId, count]) => ({
+                    classId: parseInt(classId),
+                    className: CLASSES[classId].name,
+                    color: CLASSES[classId].color,
+                    count,
+                    percentage: ((count / total) * 100).toFixed(2)
+                })).sort((a, b) => b.count - a.count);
+            };
+
+            return (
+                <div className="container mx-auto p-6 max-w-7xl">
+                    <div className="bg-white rounded-lg shadow-lg p-6 mb-6">
+                        <h1 className="text-3xl font-bold text-gray-800 mb-2">
+                            🚙 Offroad Terrain Segmentation
+                        </h1>
+                        <p className="text-gray-600 mb-4">
+                            Upload an image to get pixel-wise terrain classification
+                        </p>
+
+                        <div className="flex gap-4 items-center mb-6">
+                            <input
+                                ref={fileInputRef}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleImageUpload}
+                                className="hidden"
+                            />
+                            <button
+                                onClick={() => fileInputRef.current.click()}
+                                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-medium"
+                            >
+                                📁 Upload Image
+                            </button>
+                            
+                            {image && !processing && !segmentation && (
+                                <button
+                                    onClick={processImage}
+                                    className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-medium"
+                                >
+                                    🔍 Analyze Terrain
+                                </button>
+                            )}
+
+                            {processing && (
+                                <div className="flex items-center gap-3">
+                                    <div className="loading-spinner"></div>
+                                    <span className="text-gray-600">Processing image...</span>
+                                </div>
+                            )}
+                        </div>
+
+                        {imageUrl && (
+                            <div className="grid md:grid-cols-2 gap-6">
+                                <div>
+                                    <h3 className="text-lg font-semibold mb-3">Original Image</h3>
+                                    <div className="canvas-container">
+                                        <canvas 
+                                            ref={canvasRef}
+                                            onMouseMove={handleCanvasHover}
+                                            onMouseLeave={() => setHoveredPixel(null)}
+                                            className="max-w-full h-auto cursor-crosshair"
+                                        />
+                                        {segmentation && showOverlay && (
+                                            <canvas 
+                                                ref={overlayCanvasRef}
+                                                style={{
+                                                    position: 'absolute',
+                                                    top: '2px',
+                                                    left: '2px',
+                                                    opacity: overlayOpacity,
+                                                    pointerEvents: 'none'
+                                                }}
+                                                className="max-w-full h-auto"
+                                            />
+                                        )}
+                                    </div>
+
+                                    {hoveredPixel && (
+                                        <div className="mt-3 p-3 bg-gray-100 rounded-lg text-sm">
+                                            <strong>Pixel Info:</strong> ({hoveredPixel.x}, {hoveredPixel.y}) - 
+                                            <span 
+                                                className="ml-2 px-2 py-1 rounded text-white"
+                                                style={{ backgroundColor: CLASSES[hoveredPixel.classId].color }}
+                                            >
+                                                {hoveredPixel.className}
+                                            </span>
+                                        </div>
+                                    )}
+
+                                    {segmentation && (
+                                        <div className="mt-4 space-y-2">
+                                            <div className="flex items-center gap-3">
+                                                <label className="flex items-center gap-2">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={showOverlay}
+                                                        onChange={(e) => setShowOverlay(e.target.checked)}
+                                                        className="w-4 h-4"
+                                                    />
+                                                    <span>Show Overlay</span>
+                                                </label>
+                                                {showOverlay && (
+                                                    <div className="flex items-center gap-2">
+                                                        <label className="text-sm">Opacity:</label>
+                                                        <input
+                                                            type="range"
+                                                            min="0"
+                                                            max="1"
+                                                            step="0.1"
+                                                            value={overlayOpacity}
+                                                            onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
+                                                            className="w-32"
+                                                        />
+                                                        <span className="text-sm">{(overlayOpacity * 100).toFixed(0)}%</span>
+                                                    </div>
+                                                )}
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={downloadSegmentation}
+                                                    className="px-4 py-2 bg-purple-600 text-white rounded hover:bg-purple-700 text-sm"
+                                                >
+                                                    💾 Download Mask
+                                                </button>
+                                                <button
+                                                    onClick={downloadPixelData}
+                                                    className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
+                                                >
+                                                    📊 Download CSV
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </div>
+
+                                {segmentation && (
+                                    <div>
+                                        <h3 className="text-lg font-semibold mb-3">Class Legend</h3>
+                                        <div className="space-y-2 mb-4">
+                                            {Object.entries(CLASSES).map(([id, info]) => (
+                                                <div 
+                                                    key={id}
+                                                    className="flex items-center gap-2 p-2 rounded hover:bg-gray-50 cursor-pointer"
+                                                    onClick={() => setSelectedClass(id === selectedClass ? null : id)}
+                                                >
+                                                    <div 
+                                                        className="w-6 h-6 rounded border-2 border-gray-300"
+                                                        style={{ backgroundColor: info.color }}
+                                                    />
+                                                    <span className="text-sm font-medium">{info.name}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <h3 className="text-lg font-semibold mb-3 mt-6">Statistics</h3>
+                                        <div className="bg-gray-50 rounded-lg p-4 space-y-2">
+                                            {getClassStats().map((stat) => (
+                                                <div key={stat.classId} className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <div 
+                                                            className="w-4 h-4 rounded"
+                                                            style={{ backgroundColor: stat.color }}
+                                                        />
+                                                        <span className="text-sm">{stat.className}</span>
+                                                    </div>
+                                                    <div className="text-sm text-gray-600">
+                                                        {stat.percentage}% ({stat.count.toLocaleString()} px)
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        <div className="mt-6 p-4 bg-blue-50 rounded-lg">
+                                            <h4 className="font-semibold text-sm mb-2">💡 Output Information</h4>
+                                            <ul className="text-xs space-y-1 text-gray-700">
+                                                <li>• Hover over pixels to see classification</li>
+                                                <li>• Download mask as PNG image</li>
+                                                <li>• Export pixel data as CSV (X, Y, Class)</li>
+                                                <li>• {pixelData?.length.toLocaleString()} pixels analyzed</li>
+                                            </ul>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="bg-gray-100 rounded-lg p-4 text-sm text-gray-600">
+                        <p><strong>Note:</strong> This demo uses simulated segmentation. In production, connect this to your PyTorch model backend for real terrain classification using the offroad_best_model_fast.pth model.</p>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
